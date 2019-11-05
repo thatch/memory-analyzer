@@ -14,27 +14,47 @@ import unittest
 
 class IntegrationTest(unittest.TestCase):
     def test_works_at_all(self):
+        # This test is very Linux-centric, while the gdb bits will probably work
+        # no other unices
         output_name = tempfile.mktemp()
         print(output_name)
+
+        with open("/proc/sys/kernel/yama/ptrace_scope") as f:
+            value = f.read().strip()
+        self.assertIn(
+            value, ("0", "1"), "/proc/sys/kernel/yama/ptrace_scope should be 0 or 1"
+        )
+        print("yama/ptrace_scope is", value)
 
         # This tells us that everything important was packaged if we tox
         # installed an sdist, but doesn't tell us anything if this was setup.py
         # develop'd in a git repo.
         os.chdir("/")
 
-        self.assertFalse(os.path.exists(output_name))
-        with open("/proc/sys/kernel/yama/ptrace_scope") as f:
-            value = f.read().strip()
+        # See https://www.kernel.org/doc/Documentation/security/Yama.txt for
+        # PR_SET_PTRACER info (PR_SET_PTRACER_ANY is documented in prctl(2))
+        # This precise invocation is adapted from pwnlib/tubes/ssh.py
 
-        self.assertEqual("0", value, "/proc/sys/kernel/yama/ptrace_scope should be 0")
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                """
+import ctypes
+PR_SET_PTRACER = 0x59616d61
+PR_SET_PTRACER_ANY = -1
+ctypes.CDLL('libc.so.6').prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0)
+import sys; sys.stdin.readline()""",
+            ],
+            stdin=subprocess.PIPE,
+        )
+
+        self.assertFalse(os.path.exists(output_name))
 
         # Presumably this is a virtualenv python executable that has objgraph
-        # and pympler
+        # and pympler.  TODO test with one that removes everything from
+        # sys.path, and ensure that we can inject the dir properly.
         try:
-            child = subprocess.Popen(
-                [sys.executable, "-c", "import sys; sys.stdin.readline()"],
-                stdin=subprocess.PIPE,
-            )
             # TODO figure out how we can ensure setup is done; right now we're
             # just relying on it taking a while to launch/attach
             analyzer = subprocess.Popen(
